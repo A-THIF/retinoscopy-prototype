@@ -51,16 +51,18 @@ def generate_frames():
     global picam2
     while True:
         start = time.time()
-        if picam2:
-            frame = picam2.capture_array()
-            if frame is not None:
-                frame = cv2.flip(frame, 0)
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame = buffer.tobytes()
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        with camera_lock:
+            if picam2:
+                frame = picam2.capture_array()
+                if frame is not None:
+                    frame = cv2.flip(frame, 0)
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    frame = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
         elapsed = time.time() - start
-        time.sleep(max(0, 0.1 - elapsed))  # ~10fps
+        time.sleep(max(0, 0.1 - elapsed))
+
 
 @app.route('/video_feed')
 def video_feed():
@@ -264,7 +266,6 @@ def capture_image():
     try:
         print("Switching to high-res for image capture...")
         with camera_lock:
-            # STOP before configure to high-res
             picam2.stop()
             high_res_config = picam2.create_still_configuration(
                 main={"size": (6944, 5200), "format": "RGB888"}
@@ -273,13 +274,19 @@ def capture_image():
             picam2.start()
             time.sleep(1.5)
             frame = picam2.capture_array()
+            h, w = frame.shape[:2]
+            crop_h, crop_w = int(h * 0.5), int(w * 0.5)
+            start_y = (h - crop_h) // 2
+            start_x = (w - crop_w) // 2
+            cropped = frame[start_y:start_y+crop_h, start_x:start_x+crop_w]
             save_folder = "static/captures"
             os.makedirs(save_folder, exist_ok=True)
             filename = f"captured_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             filepath = os.path.join(save_folder, filename)
-            cv2.imwrite(filepath, frame)
+            # Save cropped or full frame as needed
+            cv2.imwrite(filepath, cropped)
             print(f"Image saved: {filepath}")
-            # STOP again before configure back to low-res
+            # Reconfigure back to video
             picam2.stop()
             video_config = picam2.create_video_configuration(
                 main={"size": (640, 480), "format": "RGB888"},
@@ -287,10 +294,10 @@ def capture_image():
             )
             picam2.configure(video_config)
             picam2.start()
-            return jsonify({
-                "message": "Image captured successfully ✅",
-                "url": f"/static/captures/{filename}"
-            }), 200
+        return jsonify({
+            "message": "Image captured successfully ✅",
+            "url": f"/static/captures/{filename}"
+        }), 200
     except Exception as e:
         print(f"Error capturing image: {e}")
         return jsonify({"error": str(e)}), 500
