@@ -274,6 +274,7 @@ def capture_image():
             picam2.start()
             time.sleep(1.5)
             frame = picam2.capture_array()
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
             h, w = frame.shape[:2]
             crop_h, crop_w = int(h * 0.5), int(w * 0.5)
             start_y = (h - crop_h) // 2
