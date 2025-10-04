@@ -1,0 +1,153 @@
+<!doctype html>
+<html>
+<head>
+    <title>Raspberry Pi Camera Control</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; background-color: #282c34; color: white; margin: 0; padding: 20px; }
+        h1 { color: #61dafb; }
+        img { border: 2px solid #61dafb; margin-top: 20px; max-width: 90%; height: auto; background-color: #000; }
+        .controls { margin: 20px auto; padding: 20px; max-width: 640px; background-color: #3a4049; border-radius: 8px; }
+        .slider-container { display: flex; align-items: center; justify-content: center; gap: 15px; }
+        label { font-size: 1.1em; }
+        input[type="range"] { flex-grow: 1; cursor: pointer; }
+        #focus-value { font-weight: bold; font-size: 1.1em; min-width: 40px; text-align: right; }
+        button { 
+            padding: 10px 20px; font-size: 16px; cursor: pointer; 
+            background-color: #61dafb; border: none; color: #282c34;
+            border-radius: 5px; margin-top: 15px; font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        button:hover:not(:disabled) { background-color: #88eaff; }
+        button:disabled { background-color: #555; color: #999; cursor: not-allowed; }
+        #status { margin-top: 10px; font-style: italic; color: #ccc; height: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Raspberry Pi Camera Control</h1>
+    <div>
+        <img id="stream" src="{{ url_for('placeholder') }}" width="640" height="480">
+    </div>
+    <div class="controls">
+        <div class="camera-controls" style="margin-bottom: 15px;">
+            <button id="start-camera-btn">Start Camera</button>
+            <button id="stop-camera-btn" disabled>Stop Camera</button>
+        </div>
+        <div class="slider-container">
+            <label for="focus">Focus:</label>
+            <input type="range" id="focus" name="focus" min="0" max="1023" step="1" disabled>
+            <span id="focus-value">...</span>
+        </div>
+        <button id="autofocus-btn" disabled>Run Autofocus</button>
+        <p id="status">Status: Initializing...</p>
+    </div>
+
+    <script>
+        const focusSlider = document.getElementById('focus');
+        const focusValueSpan = document.getElementById('focus-value');
+        const autofocusBtn = document.getElementById('autofocus-btn');
+        const statusP = document.getElementById('status');
+        const streamImg = document.getElementById('stream');
+        const startCameraBtn = document.getElementById('start-camera-btn');
+        const stopCameraBtn = document.getElementById('stop-camera-btn');
+
+        // --- Camera Control Functions ---
+        startCameraBtn.addEventListener('click', async () => {
+            statusP.textContent = 'Status: Starting camera...';
+            startCameraBtn.disabled = true;
+            try {
+                await fetch('/start_camera', { method: 'POST' });
+                streamImg.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
+                stopCameraBtn.disabled = false;
+                focusSlider.disabled = false;
+                autofocusBtn.disabled = false;
+                statusP.textContent = 'Status: Camera On';
+            } catch (error) {
+                console.error('Error starting camera:', error);
+                statusP.textContent = 'Error starting camera.';
+                startCameraBtn.disabled = false; // Re-enable on error
+            }
+        });
+
+        stopCameraBtn.addEventListener('click', async () => {
+            statusP.textContent = 'Status: Stopping camera...';
+            stopCameraBtn.disabled = true;
+            focusSlider.disabled = true;
+            autofocusBtn.disabled = true;
+            try {
+                await fetch('/stop_camera', { method: 'POST' });
+                streamImg.src = "{{ url_for('placeholder') }}";
+                startCameraBtn.disabled = false;
+                statusP.textContent = 'Status: Camera Off';
+            } catch (error) {
+                console.error('Error stopping camera:', error);
+                statusP.textContent = 'Error stopping camera.';
+                stopCameraBtn.disabled = false; // Re-enable on error
+            }
+        });
+
+        // --- Focus Control Functions ---
+        async function setFocus(value) {
+            const formData = new FormData();
+            formData.append('focus', value);
+            try {
+                await fetch('/set_focus', { method: 'POST', body: formData });
+            } catch (error) {
+                console.error('Error setting focus:', error);
+            }
+        }
+
+        focusSlider.addEventListener('change', () => setFocus(focusSlider.value));
+        focusSlider.addEventListener('input', () => focusValueSpan.textContent = focusSlider.value);
+
+        autofocusBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/autofocus', { method: 'POST' });
+                if (!response.ok) {
+                    const data = await response.json();
+                    statusP.textContent = `Status: Error - ${data.message}`;
+                }
+            } catch (error) {
+                console.error('Error starting autofocus:', error);
+            }
+        });
+
+        // Poll server for status updates every second
+        setInterval(async () => {
+            try {
+                const response = await fetch('/get_status');
+                const data = await response.json();
+                
+                // Update slider and value display if not being actively dragged
+                if (document.activeElement !== focusSlider) {
+                    focusSlider.value = data.focus_value;
+                    focusValueSpan.textContent = data.focus_value;
+                }
+
+                // Update UI based on autofocus status
+                switch (data.autofocus_status) {
+                    case 'running':
+                        statusP.textContent = 'Status: Autofocus running...';
+                        autofocusBtn.disabled = true;
+                        focusSlider.disabled = true;
+                        break;
+                    case 'finished':
+                        statusP.textContent = 'Status: Autofocus complete!';
+                        autofocusBtn.disabled = false;
+                        focusSlider.disabled = false;
+                        break;
+                    case 'idle':
+                        if (autofocusBtn.disabled) { // Only update if state changed
+                           statusP.textContent = 'Status: Idle';
+                           autofocusBtn.disabled = false;
+                           focusSlider.disabled = false;
+                        }
+                        break;
+                }
+            } catch (error) {
+                statusP.textContent = 'Status: Connection error.';
+                console.error('Error fetching status:', error);
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
